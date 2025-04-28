@@ -34,7 +34,7 @@ def create_app(config_name=None):
     # --- Initialize CORS ---
     # Read allowed origins from environment variable, fallback to '*' for development
     # Example production value for CORS_ALLOWED_ORIGINS: "https://yourfrontend.com,https://www.yourfrontend.com"
-    allowed_origins_str = os.getenv('CORS_ALLOWED_ORIGINS', 'http://127.0.0.1:5333/')
+    allowed_origins_str = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:5173')
     if allowed_origins_str == '*':
         origins = "*"
         print(" * CORS allowing all origins (development default)")
