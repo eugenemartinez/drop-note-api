@@ -72,7 +72,7 @@ def handle_generic_exception(error):
 # --- Define allowed HTML for content (example) ---
 ALLOWED_TAGS = [
     'p', 'strong', 'em', 'u', 's', 'ul', 'ol', 'li', 'blockquote', 'hr',
-    'h2', 'h3', 'code', # Add tags allowed by TipTap
+    'h2', 'h3', 'code', 'pre' # Add tags allowed by TipTap
     # Add 'a' if you allow links, configure attributes below
 ]
 ALLOWED_ATTRIBUTES = {
@@ -335,17 +335,17 @@ def get_public_notes():
 
         # --- Sorting ---
         sort_param = request.args.get('sort', 'updated_at_desc', type=str).lower()
-        # Define allowed sort fields and directions - MODIFIED for case-insensitive title sort
+        # Define allowed sort fields and directions - ADD secondary sort key for stability
         allowed_sorts = {
-            "updated_at_desc": "updated_at DESC",
-            "updated_at_asc": "updated_at ASC",
-            "created_at_desc": "created_at DESC", # Keep if needed, or remove if updated_at is sufficient
-            "created_at_asc": "created_at ASC",   # Keep if needed, or remove if updated_at is sufficient
-            "title_asc": "LOWER(title) ASC",      # Use LOWER() for case-insensitive ascending
-            "title_desc": "LOWER(title) DESC",     # Use LOWER() for case-insensitive descending
+            "updated_at_desc": "updated_at DESC, id DESC", # Added , id DESC
+            "updated_at_asc": "updated_at ASC, id ASC",   # Added , id ASC
+            "created_at_desc": "created_at DESC, id DESC", # Added , id DESC
+            "created_at_asc": "created_at ASC, id ASC",   # Added , id ASC
+            "title_asc": "LOWER(title) ASC, id ASC",      # Also good practice for titles
+            "title_desc": "LOWER(title) DESC, id DESC",     # Also good practice for titles
         }
-        # Default to updated_at DESC if invalid sort param is given
-        order_by_clause = allowed_sorts.get(sort_param, "updated_at DESC")
+        # Default to updated_at DESC (with secondary key) if invalid sort param is given
+        order_by_clause = allowed_sorts.get(sort_param, "updated_at DESC, id DESC") # Update default too
         # Store the actual sort applied for the response
         applied_sort = sort_param if sort_param in allowed_sorts else 'updated_at_desc'
 
@@ -366,7 +366,7 @@ def get_public_notes():
         where_sql = " AND ".join(where_clauses)
 
         # Select columns needed for the list view
-        # Use the dynamically determined order_by_clause
+        # Use the dynamically determined order_by_clause (which now includes the secondary key)
         select_sql = text(f"""
             SELECT id, title, content, username, tags, visibility, created_at, updated_at
             FROM drop_note
