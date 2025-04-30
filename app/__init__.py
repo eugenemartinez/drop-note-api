@@ -10,8 +10,9 @@ from config import config_by_name
 # Initialize extensions
 db = SQLAlchemy()
 limiter = Limiter( # Initialize Limiter
-    key_func=get_remote_address, # Use remote IP address to track requests
-    default_limits=["200 per day", "50 per hour"] # Default limits for routes not explicitly decorated
+    key_func=get_remote_address,
+    # REMOVE default_limits to only apply limits where explicitly decorated
+    # default_limits=["200 per day", "50 per hour"] # <-- REMOVE THIS LINE
 )
 
 def create_app(config_name=None):
@@ -32,18 +33,14 @@ def create_app(config_name=None):
         app.config.from_object(config_by_name['dev'])
 
     # --- Initialize CORS ---
-    # Read allowed origins from environment variable, fallback to '*' for development
-    # Example production value for CORS_ALLOWED_ORIGINS: "https://yourfrontend.com,https://www.yourfrontend.com"
     allowed_origins_str = os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:5173')
     if allowed_origins_str == '*':
         origins = "*"
         print(" * CORS allowing all origins (development default)")
     else:
-        # Split comma-separated string into a list
         origins = [origin.strip() for origin in allowed_origins_str.split(',')]
         print(f" * CORS allowing specific origins: {', '.join(origins)}")
 
-    # Apply CORS settings
     CORS(app, resources={r"/api/*": {"origins": origins}})
     # --- End CORS Initialization ---
 

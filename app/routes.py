@@ -1,7 +1,8 @@
 import os
 import secrets
 import uuid
-from flask import Blueprint, request, jsonify, abort # Import abort
+import bleach
+from flask import Blueprint, request, jsonify, abort, current_app # Add current_app
 from sqlalchemy import text, exc as sqlalchemy_exc
 from werkzeug.exceptions import HTTPException
 from . import db
@@ -18,63 +19,67 @@ write_limit = "50 per day"
 @api.errorhandler(ValueError) # Handles potential ValueErrors (e.g., bad UUID format)
 def handle_bad_request(error):
     """Handles 400 Bad Request errors and ValueErrors."""
-    # If it's a HTTPException, it might have a description
     message = getattr(error, 'description', "Invalid input or request format.")
-    # If it's our custom validation error structure
     details = getattr(error, 'details', None)
     response = {"error": message}
     if details:
         response["details"] = details
-    print(f"Bad Request/ValueError: {error}") # Log the error
+    current_app.logger.warning(f"Bad Request/ValueError: {error}") # Use logger.warning
     return jsonify(response), 400
 
 @api.errorhandler(404) # Handles werkzeug.exceptions.NotFound
 def handle_not_found(error):
     """Handles 404 Not Found errors."""
     message = getattr(error, 'description', "Resource not found.")
-    print(f"Not Found: {error}")
+    current_app.logger.warning(f"Not Found: {error}") # Use logger.warning
     return jsonify({"error": message}), 404
 
 @api.errorhandler(403) # Handles werkzeug.exceptions.Forbidden
 def handle_forbidden(error):
     """Handles 403 Forbidden errors (e.g., invalid modification code)."""
     message = getattr(error, 'description', "Access forbidden.")
-    print(f"Forbidden: {error}")
+    current_app.logger.warning(f"Forbidden: {error}") # Use logger.warning
     return jsonify({"error": message}), 403
 
 @api.errorhandler(429) # Handles Rate Limit Exceeded from Flask-Limiter
 def handle_rate_limit_exceeded(error):
     """Handles 429 Too Many Requests errors."""
-    # The error object contains details about the limit
     message = f"Rate limit exceeded: {error.description}"
-    print(f"Rate Limit Exceeded: {error}")
+    current_app.logger.warning(f"Rate Limit Exceeded: {error}") # Use logger.warning
     return jsonify({"error": message}), 429
 
 @api.errorhandler(sqlalchemy_exc.SQLAlchemyError) # Catch specific DB errors
 def handle_database_error(error):
     """Handles database-related errors."""
-    db.session.rollback() # Rollback the session on DB error
-    # Log the specific database error for debugging
-    print(f"Database Error: {error}")
-    # Return a generic message to the client
+    db.session.rollback()
+    current_app.logger.exception("Database Error:") # Use logger.exception for traceback
     return jsonify({"error": "A database error occurred."}), 500
 
 @api.errorhandler(Exception) # Catch-all for any other exceptions
 def handle_generic_exception(error):
     """Handles any other unexpected exceptions."""
-    # If it's an HTTPException we haven't explicitly handled, use its code
     if isinstance(error, HTTPException):
-        print(f"HTTP Exception {error.code}: {error}")
+        current_app.logger.error(f"HTTP Exception {error.code}: {error}") # Use logger.error
         return jsonify({"error": getattr(error, 'description', "An unexpected error occurred.")}), error.code
 
-    # For non-HTTP exceptions, log the full error and return a generic 500
-    print(f"Unhandled Exception: {error}") # Log the full error trace if possible
-    # traceback.print_exc() # Uncomment if you import traceback for full trace
+    current_app.logger.exception("Unhandled Exception:") # Use logger.exception for traceback
     return jsonify({"error": "An internal server error occurred."}), 500
 
 # --- End Error Handlers ---
 
 # --- Validation Helper ---
+
+# --- Define allowed HTML for content (example) ---
+ALLOWED_TAGS = [
+    'p', 'strong', 'em', 'u', 's', 'ul', 'ol', 'li', 'blockquote', 'hr',
+    'h2', 'h3', 'code', # Add tags allowed by TipTap
+    # Add 'a' if you allow links, configure attributes below
+]
+ALLOWED_ATTRIBUTES = {
+    # Example: Allow 'href' and 'title' on 'a' tags
+    # 'a': ['href', 'title'],
+}
+# --- End Allowed HTML ---
 
 def validate_note_data(data, is_create=False):
     """
@@ -147,6 +152,59 @@ def validate_note_data(data, is_create=False):
     elif is_create:
         validated_data['visibility'] = 'public' # Default to public if not provided on create
 
+    # --- Sanitize Content ---
+    if 'content' in validated_data:
+        # Clean content using bleach, allowing specific tags/attributes
+        validated_data['content'] = bleach.clean(
+            validated_data['content'],
+            tags=ALLOWED_TAGS,
+            attributes=ALLOWED_ATTRIBUTES,
+            strip=True # Remove disallowed tags completely
+        )
+        # Add length check after cleaning
+        if len(validated_data['content']) > 10000: # Example limit
+             errors['content'] = "Content exceeds maximum length"
+
+
+    # --- Sanitize Title (strip all HTML) ---
+    if 'title' in validated_data:
+        original_title = validated_data['title']
+        validated_data['title'] = bleach.clean(original_title, tags=[], strip=True).strip()
+        if not validated_data['title']: # Check if empty after stripping
+             errors['title'] = "Title cannot be empty or only contain HTML tags"
+        elif len(validated_data['title']) > 255: # Example limit
+             errors['title'] = "Title exceeds maximum length"
+
+    # --- Sanitize Tags (strip all HTML) ---
+    if 'tags' in validated_data:
+        cleaned_tags = []
+        valid_tags = True
+        for tag in validated_data['tags']:
+            cleaned_tag = bleach.clean(tag, tags=[], strip=True).strip()
+            if not cleaned_tag: # Disallow empty tags or tags with only HTML
+                errors['tags'] = "Tags cannot be empty or contain only HTML"
+                valid_tags = False
+                break
+            if len(cleaned_tag) > 50: # Example limit
+                 errors['tags'] = f"Tag '{cleaned_tag[:20]}...' exceeds maximum length"
+                 valid_tags = False
+                 break
+            cleaned_tags.append(cleaned_tag)
+        if valid_tags:
+            validated_data['tags'] = cleaned_tags
+        else:
+             # Remove tags from validated_data if an error occurred during cleaning
+             if 'tags' in validated_data: del validated_data['tags']
+
+
+    # --- Sanitize Username (strip all HTML) ---
+    # (Assuming username is handled separately for now, but apply similar logic)
+    # if 'username' in validated_data:
+    #    validated_data['username'] = bleach.clean(validated_data['username'], tags=[], strip=True).strip()
+    #    if not validated_data['username']: errors['username'] = "Username cannot be empty..."
+    #    elif len(validated_data['username']) > 100: errors['username'] = "Username exceeds..."
+
+
     return validated_data, errors
 
 # --- End Validation Helper ---
@@ -172,30 +230,41 @@ def create_note():
     # --- Centralized Input Validation ---
     validated_data, errors = validate_note_data(data, is_create=True)
     if errors:
-        # Combine errors into a single description string
         error_desc = "Invalid input: " + "; ".join([f"{k}: {v}" for k, v in errors.items()])
         abort(400, description=error_desc)
 
-    # Extract validated data (defaults for optional fields are set by validator)
+    # Extract validated AND SANITIZED data
     title = validated_data['title']
     content = validated_data['content']
     tags = validated_data['tags']
     visibility = validated_data['visibility']
-    username = data.get('username') # Keep username handling separate for now
+    # Get username from original data *before* validation might remove it
+    username_input = data.get('username')
 
     # --- Generate Username if not provided ---
-    final_username = username
+    # Sanitize the input username if provided
+    if username_input and isinstance(username_input, str):
+         final_username = bleach.clean(username_input, tags=[], strip=True).strip()
+         if not final_username:
+             final_username = None
+         elif len(final_username) > 100:
+             abort(400, description="Username exceeds maximum length (100 characters)")
+    else:
+         final_username = None
+
+    # If no valid username was provided, generate one using the sequence
     if not final_username:
         try:
             sequence_result = db.session.execute(text("SELECT nextval('anonymous_user_seq')")).scalar_one()
             final_username = f"anonymous{sequence_result}"
         except sqlalchemy_exc.SQLAlchemyError as e:
              db.session.rollback()
-             print(f"Error fetching sequence: {e}")
-             abort(500, description="Failed to generate anonymous username due to database issue.")
+             current_app.logger.exception("Database Error fetching sequence:") # Use logger.exception
+             abort(500, description="Failed to generate anonymous username due to a database issue.")
         except Exception as e:
-             print(f"Unexpected error fetching sequence: {e}")
+             current_app.logger.exception("Unexpected Error fetching sequence:") # Use logger.exception
              abort(500, description="Failed to generate anonymous username due to an unexpected error.")
+    # --- End Generate Username ---
 
     # --- Generate Modification Code ---
     modification_code = generate_modification_code()
@@ -209,7 +278,7 @@ def create_note():
     result = db.session.execute(insert_sql, {
         'title': title,
         'content': content,
-        'username': final_username,
+        'username': final_username, # Use the final username here
         'tags': tags,
         'visibility': visibility,
         'modification_code': modification_code
@@ -217,6 +286,8 @@ def create_note():
     new_note_data = result.fetchone()
 
     if not new_note_data:
+         db.session.rollback()
+         # Let the generic error handler catch this
          raise Exception("Failed to retrieve new note data after insert.")
 
     db.session.commit()
@@ -227,7 +298,7 @@ def create_note():
         "id": str(new_note_id),
         "title": title,
         "content": content,
-        "username": final_username,
+        "username": final_username, # Use the final username here
         "tags": tags,
         "visibility": visibility,
         "created_at": created_at.isoformat(),
@@ -264,14 +335,14 @@ def get_public_notes():
 
         # --- Sorting ---
         sort_param = request.args.get('sort', 'updated_at_desc', type=str).lower()
-        # Define allowed sort fields and directions to prevent SQL injection
+        # Define allowed sort fields and directions - MODIFIED for case-insensitive title sort
         allowed_sorts = {
             "updated_at_desc": "updated_at DESC",
             "updated_at_asc": "updated_at ASC",
-            "created_at_desc": "created_at DESC",
-            "created_at_asc": "created_at ASC",
-            "title_asc": "title ASC",
-            "title_desc": "title DESC",
+            "created_at_desc": "created_at DESC", # Keep if needed, or remove if updated_at is sufficient
+            "created_at_asc": "created_at ASC",   # Keep if needed, or remove if updated_at is sufficient
+            "title_asc": "LOWER(title) ASC",      # Use LOWER() for case-insensitive ascending
+            "title_desc": "LOWER(title) DESC",     # Use LOWER() for case-insensitive descending
         }
         # Default to updated_at DESC if invalid sort param is given
         order_by_clause = allowed_sorts.get(sort_param, "updated_at DESC")
@@ -288,12 +359,13 @@ def get_public_notes():
             params['tag'] = filter_tag
 
         if search_term:
+            # Use ILIKE for case-insensitive search
             where_clauses.append("(title ILIKE :search_pattern OR content ILIKE :search_pattern)")
             params['search_pattern'] = f"%{search_term}%"
 
         where_sql = " AND ".join(where_clauses)
 
-        # Select columns needed for the list view - ADD content HERE
+        # Select columns needed for the list view
         # Use the dynamically determined order_by_clause
         select_sql = text(f"""
             SELECT id, title, content, username, tags, visibility, created_at, updated_at
@@ -317,16 +389,17 @@ def get_public_notes():
             note_dict['tags'] = note_dict.get('tags') or []
             notes_list.append(note_dict)
 
-        # --- Get Total Count for Pagination (adjust for filter/search) ---
+
+        # --- Get Total Count for Pagination ---
         count_sql = text(f"SELECT COUNT(*) FROM drop_note WHERE {where_sql}")
         count_params = {}
         if filter_tag:
             count_params['tag'] = filter_tag
         if search_term:
             count_params['search_pattern'] = f"%{search_term}%"
-
         total_notes = db.session.execute(count_sql, count_params).scalar_one()
         total_pages = (total_notes + limit - 1) // limit
+
 
         response = {
             "notes": notes_list,
@@ -337,15 +410,16 @@ def get_public_notes():
                 "total_pages": total_pages,
                 "filter_tag": filter_tag,
                 "search_term": search_term,
-                "sort": applied_sort # Include sort in pagination info
+                "sort": applied_sort
             }
         }
 
         return jsonify(response), 200
 
     except Exception as e:
-        print(f"Error fetching public notes: {e}")
-        return jsonify({"error": "Database error occurred while fetching notes"}), 500
+        current_app.logger.exception("Error fetching public notes:") # Use logger.exception
+        # Let the centralized handler manage the response
+        abort(500, description="Database error occurred while fetching notes")
 
 
 # --- NEW: Get Random Public Note Route ---
@@ -382,8 +456,8 @@ def get_random_note():
         return jsonify(response_data), 200
 
     except Exception as e:
-        print(f"Error fetching random note: {e}")
-        return jsonify({"error": "Database error occurred while fetching random note"}), 500
+        current_app.logger.exception("Error fetching random note:") # Use logger.exception
+        abort(500, description="Database error occurred while fetching random note")
 
 
 @api.route('/tags', methods=['GET'])
@@ -407,8 +481,8 @@ def get_public_tags():
         return jsonify({"tags": tags_list}), 200
 
     except Exception as e:
-        print(f"Error fetching public tags: {e}")
-        return jsonify({"error": "Database error occurred while fetching tags"}), 500
+        current_app.logger.exception("Error fetching public tags:") # Use logger.exception
+        abort(500, description="Database error occurred while fetching tags")
 
 
 @api.route('/notes/<uuid:note_id>', methods=['GET'])
@@ -434,14 +508,15 @@ def get_note(note_id):
         # Convert UUID id back to string for JSON response
         response_data['id'] = str(response_data['id'])
         response_data['created_at'] = response_data['created_at'].isoformat()
-        response_data['updated_at'] = response_data['updated_at'].isoformat()
+        response_data['updated_at'] = response_data['updated_at']. isoformat()
         response_data['tags'] = response_data.get('tags') or []
 
         return jsonify(response_data), 200
 
     except Exception as e:
-        print(f"Error fetching note {note_id}: {e}")
-        return jsonify({"error": "Database error occurred while fetching note"}), 500
+        current_app.logger.exception(f"Error fetching note {note_id}:") # Use logger.exception
+        abort(500, description="Database error occurred while fetching note")
+
 
 @api.route('/notes/<uuid:note_id>', methods=['PUT'])
 @limiter.limit(write_limit)
@@ -553,7 +628,7 @@ def delete_note(note_id):
     if result_proxy.rowcount == 0:
         # This case might indicate a race condition if the note was deleted
         # between the check and the delete. Treating as success (idempotent) is often fine.
-        print(f"Warning: DELETE affected 0 rows for note {note_id}. Might have been deleted concurrently.")
+        current_app.logger.warning(f"DELETE affected 0 rows for note {note_id}. Might have been deleted concurrently.") # Use logger.warning
         # Still commit potential transaction state changes if any occurred before delete
         db.session.commit()
         return '', 204
@@ -626,5 +701,5 @@ def get_notes_batch():
         return jsonify({"notes": notes_list}), 200
 
     except Exception as e:
-        print(f"Error fetching notes batch: {e}")
-        return jsonify({"error": "Database error occurred while fetching notes batch"}), 500
+        current_app.logger.exception("Error fetching notes batch:") # Use logger.exception
+        abort(500, description="Database error occurred while fetching notes batch")
