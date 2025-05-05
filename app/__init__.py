@@ -5,14 +5,16 @@ from sqlalchemy import text
 from flask_cors import CORS
 from flask_limiter import Limiter # Import Limiter
 from flask_limiter.util import get_remote_address # Import strategy for identifying users
+from flask_migrate import Migrate # <-- Import Migrate
 from config import config_by_name
 
 # Initialize extensions
 db = SQLAlchemy()
+migrate = Migrate() # <-- Create Migrate instance
 limiter = Limiter( # Initialize Limiter
     key_func=get_remote_address,
     # REMOVE default_limits to only apply limits where explicitly decorated
-    # default_limits=["200 per day", "50 per hour"] # <-- REMOVE THIS LINE
+    # default_limits=["200 per day", "50 per hour"]
 )
 
 def create_app(config_name=None):
@@ -46,16 +48,23 @@ def create_app(config_name=None):
 
     # --- Initialize Extensions with App Context ---
     db.init_app(app)
+    migrate.init_app(app, db) # <-- Initialize Migrate with app and db
     limiter.init_app(app) # Initialize Limiter with the app
+
+    # --- Import models AFTER db is initialized ---
+    with app.app_context(): # Ensure we are in app context
+        from . import models  # <-- ADD THIS LINE HERE
 
     # Register blueprints
     from .routes import api as api_blueprint
-    app.register_blueprint(api_blueprint)
+    # Ensure the blueprint is registered with the /api prefix
+    app.register_blueprint(api_blueprint, url_prefix='/api')
 
     # --- Add Root Route with DB Check ---
     @app.route('/')
     def index():
         try:
+            # Use a more specific query if needed, SELECT 1 is fine for basic check
             db.session.execute(text('SELECT 1'))
             db_status = "connected"
         except Exception as e:
@@ -67,5 +76,7 @@ def create_app(config_name=None):
             "database_status": db_status
         })
     # --- End Root Route ---
+
+    # Error handlers are registered in routes.py using @api.errorhandler
 
     return app

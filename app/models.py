@@ -1,5 +1,8 @@
 from . import db # Import the db instance from app/__init__.py
-from sqlalchemy.dialects.postgresql import UUID, ARRAY, TEXT, TIMESTAMPTZ # Import PostgreSQL specific types
+# Remove TIMESTAMPTZ from this import
+from sqlalchemy.dialects.postgresql import UUID, ARRAY, TEXT
+# Import the standard TIMESTAMP type from SQLAlchemy core
+from sqlalchemy import TIMESTAMP
 import uuid # For the default UUID generation in Python (alternative to DB default)
 
 class DropNote(db.Model):
@@ -21,9 +24,9 @@ class DropNote(db.Model):
     tags = db.Column(ARRAY(TEXT), nullable=True) # Nullable=True allows empty/no tags
     visibility = db.Column(TEXT, nullable=False, default='public')
     modification_code = db.Column(TEXT, unique=True, nullable=False)
-    # Use TIMESTAMPTZ for timestamp with time zone
-    created_at = db.Column(TIMESTAMPTZ, nullable=False, server_default=db.func.current_timestamp())
-    updated_at = db.Column(TIMESTAMPTZ, nullable=False, server_default=db.func.current_timestamp(), onupdate=db.func.current_timestamp())
+    # Use TIMESTAMP(timezone=True) instead of TIMESTAMPTZ
+    created_at = db.Column(TIMESTAMP(timezone=True), nullable=False, server_default=db.func.current_timestamp())
+    updated_at = db.Column(TIMESTAMP(timezone=True), nullable=False, server_default=db.func.current_timestamp(), onupdate=db.func.current_timestamp())
 
     # Add constraints if needed (though CHECK constraints are often handled in DB schema)
     # Example: __table_args__ = (db.CheckConstraint("visibility IN ('public', 'private')"),)
