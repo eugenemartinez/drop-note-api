@@ -11,7 +11,7 @@ from . import limiter
 api = Blueprint('api', __name__, url_prefix='/api')
 
 # Define the specific rate limit string
-write_limit = "50 per day"
+write_limit = "500 per day"
 # --- NEW: Define the hard limit for total notes ---
 MAX_TOTAL_NOTES = 50 # Or get from app.config or os.environ for more flexibility
 
