@@ -12,6 +12,8 @@ api = Blueprint('api', __name__, url_prefix='/api')
 
 # Define the specific rate limit string
 write_limit = "50 per day"
+# --- NEW: Define the hard limit for total notes ---
+MAX_TOTAL_NOTES = 50 # Or get from app.config or os.environ for more flexibility
 
 # --- Centralized Error Handlers ---
 
@@ -220,7 +222,21 @@ def generate_modification_code(length=8):
 def create_note():
     """
     Creates a new note using centralized validation.
+    Stops accepting new notes if MAX_TOTAL_NOTES is reached.
     """
+    # --- NEW: Check total notes count ---
+    try:
+        current_notes_count = db.session.execute(text("SELECT COUNT(*) FROM drop_note")).scalar_one()
+        if current_notes_count >= MAX_TOTAL_NOTES:
+            current_app.logger.warning(f"Max total notes limit reached ({MAX_TOTAL_NOTES}). Rejecting new note.")
+            # Using 403 Forbidden, as the action is disallowed due to a server policy
+            abort(403, description=f"The maximum number of notes ({MAX_TOTAL_NOTES}) has been reached. New submissions are currently disabled.")
+    except sqlalchemy_exc.SQLAlchemyError as e:
+        db.session.rollback()
+        current_app.logger.exception("Database Error checking total notes count:")
+        abort(500, description="Failed to check note capacity due to a database issue.")
+    # --- END NEW: Check total notes count ---
+
     if not request.is_json:
         abort(400, description="Request must be JSON")
     data = request.get_json()

@@ -13,4 +13,4 @@ if __name__ == "__main__":
     # For production, Gunicorn will directly use the 'app' variable.
     # Use Flask's built-in server for local development (or `flask run`)
     # The port 5333 is often used by Flask dev server, but can be anything
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5333)), debug=app.config.get('DEBUG', False))
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)), debug=app.config.get('DEBUG', False))

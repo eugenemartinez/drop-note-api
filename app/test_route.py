@@ -8,37 +8,39 @@ from . import db
 @pytest.fixture(scope='module')
 def app():
     """Create and configure a new app instance for each test module."""
+    # Store the original FLASK_CONFIG if it exists
     original_flask_config = os.environ.get('FLASK_CONFIG')
-    os.environ['FLASK_CONFIG'] = 'test'
+    os.environ['FLASK_CONFIG'] = 'test' # Ensure tests run with test configuration
 
+    # Create the Flask app using the factory function from __init__.py
+    # This should pick up FLASK_CONFIG='test'
     flask_app = create_app()
 
-    # Establish an application context BEFORE accessing db
+    # Establish an application context BEFORE accessing db or other app-bound extensions
     ctx = flask_app.app_context()
     ctx.push()
 
-    # --- START: Create tables for the in-memory database ---
+    # --- Create tables for the database ---
+    # This assumes your TestConfig (or the config 'test' maps to)
+    # points to the database you intend to use for these tests.
     try:
-        db.create_all() # Create tables based on models
+        db.create_all() # Create tables based on SQLAlchemy models
         yield flask_app # Provide the app instance to tests
     finally:
-        # --- Clean up DB and context after tests ---
-        db.session.remove() # Ensure session is closed
-        db.drop_all() # Drop tables from the in-memory database
+        # --- Clean up context after tests ---
+        db.session.remove() # Ensure session is closed properly
+        # db.drop_all() # <<--- REMOVE OR COMMENT OUT THIS LINE
         ctx.pop() # Pop the application context
-    # --- END: Create/Drop tables ---
 
-
-    # Clean up environment variable
+    # Restore original FLASK_CONFIG
     if original_flask_config is None:
-        # Use pop to safely remove, handling case where it might already be gone
-        os.environ.pop('FLASK_CONFIG', None)
+        del os.environ['FLASK_CONFIG']
     else:
         os.environ['FLASK_CONFIG'] = original_flask_config
 
 
 # --- Pytest Fixture for the Test Client ---
-@pytest.fixture()
+@pytest.fixture(scope='module')
 def client(app):
     """A test client for the app."""
     return app.test_client()
